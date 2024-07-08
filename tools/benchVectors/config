@@ -1,0 +1,5 @@
+type=make
+
+export ADDCPPFLAGS=$(pkg-config benchmark --cflags)
+export ADDLDFLAGS=$(pkg-config benchmark --libs)
+args=--benchmark_out=timings.json
