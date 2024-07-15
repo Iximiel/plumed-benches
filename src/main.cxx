@@ -302,6 +302,7 @@ getAtomDistribution(std::string_view atomicDistr) {
   return distribution;
 }
 
+template <bool onlyCalculate>
 void plumedBenchmark(benchmark::State &state, std::string kernelPath,
                      std::string plumedFile, int nsteps, unsigned natoms,
                      std::string adString, std::string outFile) {
@@ -353,8 +354,14 @@ void plumedBenchmark(benchmark::State &state, std::string kernelPath,
   std::vector<double> charges(natoms, 0);
   std::vector<int> shuffled_indexes;
   std::iota(shuffled_indexes.begin(), shuffled_indexes.end(), 0);
+  //   double timeToSleep = 1.0;
+  //   std::unique_ptr<FILE, FileDeleter> log_dev_null{std::fopen("/dev/null",
+  //   "w")};
   long long int step = 0;
   for (auto _ : state) {
+    if constexpr (onlyCalculate) {
+      state.PauseTiming();
+    }
     distribution->positions(pos, step, atomicGenerator);
     distribution->box(cell, natoms, step, atomicGenerator);
     double *pos_ptr;
@@ -386,6 +393,9 @@ void plumedBenchmark(benchmark::State &state, std::string kernelPath,
     //   }
     p.cmd("prepareCalc");
 
+    if constexpr (onlyCalculate) {
+      state.ResumeTiming();
+    }
     p.cmd("performCalc");
 
     ++step;
@@ -397,11 +407,39 @@ int main(int argc, char **argv) {
 
   std::string kp = "./libplumedKernel100724.so";
   std::string plumedPath = "./plumed.dat";
-  benchmark::RegisterBenchmark("try", PLMD::plumedBenchmark, kp, plumedPath,
-                               1000, 1000, "sc", "try.out");
-  benchmark::RegisterBenchmark("this", PLMD::plumedBenchmark, "this",
-                               "./plumed_.dat", 1000, 1000, "sc", "this.out");
+  auto natoms = 5000;
+
+  auto x =
+      benchmark::RegisterBenchmark("try-calculate", PLMD::plumedBenchmark<true>,
+                                   kp, plumedPath, 1000, natoms, "sc",
+                                   "try.out")
+          ->ComputeStatistics(
+              "max",
+              [](const std::vector<double> &v) -> double {
+                return 100 * *(std::max_element(std::begin(v), std::end(v)));
+              })
+          ->Unit(benchmark::kMillisecond)
+          ->ThreadRange(1, 8)
+          ->UseRealTime();
+  ;
+
+  benchmark::RegisterBenchmark("try-all", PLMD::plumedBenchmark<false>, kp,
+                               plumedPath, 1000, natoms, "sc", "try.out")
+      ->Unit(benchmark::kMillisecond)
+      ->ThreadRange(1, 8)
+      ->UseRealTime();
+
+  benchmark::RegisterBenchmark("this-calculate", PLMD::plumedBenchmark<true>,
+                               "this", "./plumed_.dat", 1000, natoms, "sc",
+                               "this.out")
+      ->Unit(benchmark::kMillisecond);
+
+  benchmark::RegisterBenchmark("this-all", PLMD::plumedBenchmark<false>, "this",
+                               "./plumed_.dat", 1000, natoms, "sc", "this.out")
+      ->Unit(benchmark::kMillisecond);
+
   benchmark::Initialize(&argc, argv);
+
   benchmark::RunSpecifiedBenchmarks();
   benchmark::Shutdown();
 }
