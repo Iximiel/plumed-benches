@@ -25,6 +25,20 @@ BENCHMARK(PLMDVectorG_defaultCtor<3>);
 BENCHMARK(PLMDVectorG_defaultCtor<4>);
 BENCHMARK(PLMDVectorG_defaultCtor<5>);
 
+template <unsigned n>
+static void PLMDVectorG_copyCtor(benchmark::State &state) {
+  std::vector<VectorGeneric<n>> v(10);
+  for (auto _ : state) {
+    v[0] = VectorGeneric<n>();
+    benchmark::DoNotOptimize(v.data());
+  }
+}
+BENCHMARK(PLMDVectorG_copyCtor<1>);
+BENCHMARK(PLMDVectorG_copyCtor<2>);
+BENCHMARK(PLMDVectorG_copyCtor<3>);
+BENCHMARK(PLMDVectorG_copyCtor<4>);
+BENCHMARK(PLMDVectorG_copyCtor<5>);
+
 static void PLMDVectorG_InitDouble(benchmark::State &state) {
 
   dist_d dist(0, 10);
@@ -35,7 +49,8 @@ static void PLMDVectorG_InitDouble(benchmark::State &state) {
     a[i] = dist(gen);
   }
   for (auto _ : state) {
-    benchmark::DoNotOptimize(Vector(a[0], a[1], a[2]));
+    Vector v(a[0], a[1], a[2]);
+    benchmark::DoNotOptimize(v);
   }
 }
 
