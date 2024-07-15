@@ -45,7 +45,7 @@ using generator = std::mt19937;
 namespace PLMD {
 
 /// This base class contains members that are movable with default operations
-struct KernelBase {
+struct KernelInternals {
   std::string path;
   std::string plumed_dat;
   PlumedHandle handle;
@@ -53,8 +53,8 @@ struct KernelBase {
   std::vector<long long int> timings;
   double comparative_timing = -1.0;
   double comparative_timing_error = -1.0;
-  KernelBase(const std::string &path_, const std::string &plumed_dat_,
-             Log *log_)
+  KernelInternals(const std::string &path_, const std::string &plumed_dat_,
+                  Log *log_)
       : path(path_), plumed_dat(plumed_dat_), handle([&]() {
           if (path_ == "this")
             return PlumedHandle();
@@ -67,31 +67,33 @@ struct KernelBase {
 /// Local structure handling a kernel and the related timers.
 /// This structure specifically contain the Log, which needs special treatment
 /// in move semantics
-struct Kernel : public KernelBase {
+struct Kernel {
+  KernelInternals internals;
   Log *log = nullptr;
   Kernel(const std::string &path_, const std::string &the_plumed_dat, Log *log_)
-      : KernelBase(path_, the_plumed_dat, log_), log(log_) {}
+      : internals(path_, the_plumed_dat, log_), log(log_) {}
 
   ~Kernel() {
     if (log) {
       (*log) << "\n";
-      (*log) << "Kernel:      " << path << "\n";
-      (*log) << "Input:       " << plumed_dat << "\n";
-      if (comparative_timing > 0.0) {
-        (*log).printf("Comparative: %.3f +- %.3f\n", comparative_timing,
-                      comparative_timing_error);
+      (*log) << "Kernel:      " << internals.path << "\n";
+      (*log) << "Input:       " << internals.plumed_dat << "\n";
+      if (internals.comparative_timing > 0.0) {
+        (*log).printf("Comparative: %.3f +- %.3f\n",
+                      internals.comparative_timing,
+                      internals.comparative_timing_error);
       }
     }
   }
 
   Kernel(Kernel &&other) noexcept
-      : KernelBase(std::move(other)), log(other.log) {
+      : internals(std::move(other.internals)), log(other.log) {
     other.log = nullptr; // ensure no log is done in the moved away object
   }
 
   Kernel &operator=(Kernel &&other) noexcept {
     if (this != &other) {
-      KernelBase::operator=(std::move(other));
+      internals = std::move(other.internals);
       log = other.log;
       other.log = nullptr; // ensure no log is done in the moved away object
     }
@@ -302,7 +304,7 @@ getAtomDistribution(std::string_view atomicDistr) {
 
 void plumedBenchmark(benchmark::State &state, std::string kernelPath,
                      std::string plumedFile, int nsteps, unsigned natoms,
-                     std::string adString) {
+                     std::string adString, std::string outFile) {
   std::unique_ptr<AtomDistribution> distribution =
       getAtomDistribution(adString);
   struct FileDeleter {
@@ -311,7 +313,7 @@ void plumedBenchmark(benchmark::State &state, std::string kernelPath,
         std::fclose(f);
     }
   };
-  std::unique_ptr<FILE, FileDeleter> out{std::fopen("benchmark.out", "w")};
+  std::unique_ptr<FILE, FileDeleter> out{std::fopen(outFile.c_str(), "w")};
   Log log;
   log.link(out.get());
   Kernel kernel(kernelPath, plumedFile, &log);
@@ -326,11 +328,12 @@ void plumedBenchmark(benchmark::State &state, std::string kernelPath,
 
   const auto initial_time = std::chrono::high_resolution_clock::now();
 
-  auto &p(kernel.handle);
+  auto &p(kernel.internals.handle);
 
   // if (Communicator::plumedHasMPI() && domain_decomposition){
   //  p.cmd("setMPIComm", &pc.Get_comm());
   //                  }
+  p.cmd("setLog", out.get());
   p.cmd("setRealPrecision", (int)sizeof(double));
   p.cmd("setMDLengthUnits", 1.0);
   p.cmd("setMDChargeUnits", 1.0);
@@ -350,7 +353,7 @@ void plumedBenchmark(benchmark::State &state, std::string kernelPath,
   std::vector<double> charges(natoms, 0);
   std::vector<int> shuffled_indexes;
   std::iota(shuffled_indexes.begin(), shuffled_indexes.end(), 0);
-  int step = 0;
+  long long int step = 0;
   for (auto _ : state) {
     distribution->positions(pos, step, atomicGenerator);
     distribution->box(cell, natoms, step, atomicGenerator);
@@ -367,9 +370,9 @@ void plumedBenchmark(benchmark::State &state, std::string kernelPath,
     n_local_atoms = natoms;
     indexes_ptr = shuffled_indexes.data();
 
-    auto &p(kernel.handle);
+    auto &p(kernel.internals.handle);
 
-    p.cmd("setStep", step);
+    p.cmd("setStepLongLong", step);
     p.cmd("setStopFlag", &plumedStopCondition);
     p.cmd("setForces", for_ptr, {n_local_atoms, 3});
     p.cmd("setBox", &cell[0], {3, 3});
@@ -392,10 +395,12 @@ void plumedBenchmark(benchmark::State &state, std::string kernelPath,
 
 int main(int argc, char **argv) {
 
-  std::string kp = "./libplumedKernel.so";
+  std::string kp = "./libplumedKernel100724.so";
   std::string plumedPath = "./plumed.dat";
   benchmark::RegisterBenchmark("try", PLMD::plumedBenchmark, kp, plumedPath,
-                               1000, 1000, "sc");
+                               1000, 1000, "sc", "try.out");
+  benchmark::RegisterBenchmark("this", PLMD::plumedBenchmark, "this",
+                               "./plumed_.dat", 1000, 1000, "sc", "this.out");
   benchmark::Initialize(&argc, argv);
   benchmark::RunSpecifiedBenchmarks();
   benchmark::Shutdown();
